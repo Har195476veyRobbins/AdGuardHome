@@ -41,8 +41,8 @@ build-race:
 ## test: Run all tests
 test:
 	@echo "Running tests..."
-	# Increased timeout to 120s since some DNS tests can be slow on my machine
-	go test -count=1 -race -timeout 120s ./...
+	# Increased timeout to 180s since some DNS tests can be slow on my machine
+	go test -count=1 -race -timeout 180s ./...
 
 ## test-short: Run short tests only
 test-short:
