@@ -1,152 +1,87 @@
-# Keep the Makefile POSIX-compliant.  We currently allow hyphens in target
-# names, but that may change in the future.
-#
-# See https://pubs.opengroup.org/onlinepubs/9799919799/utilities/make.html.
-.POSIX:
+# AdGuardHome Makefile
+# Provides common build, test, and development targets
 
-# This comment is used to simplify checking local copies of the Makefile.  Bump
-# this number every time a significant change is made to this Makefile.
-#
-# AdGuard-Project-Version: 12
+.PHONY: all build test lint clean help
 
-# Don't name these macros "GO" etc., because GNU Make apparently makes them
-# exported environment variables with the literal value of "${GO:-go}" and so
-# on, which is not what we need.  Use a dot in the name to make sure that users
-# don't have an environment variable with the same name.
-#
-# See https://unix.stackexchange.com/q/646255/105635.
-GO.MACRO = $${GO:-go}
-VERBOSE.MACRO = $${VERBOSE:-0}
+# Go binary name
+BINARY_NAME := AdGuardHome
 
-CHANNEL = development
-CLIENT_DIR = client
-DEPLOY_SCRIPT_PATH = not/a/real/path
-DIST_DIR = dist
-GOAMD64 = v1
-GOPROXY = https://proxy.golang.org|direct
-GOTELEMETRY = off
-GOTOOLCHAIN = go1.26.2
-GPG_KEY = devteam@adguard.com
-GPG_KEY_PASSPHRASE = not-a-real-password
-NPM = npm
-NPM_FLAGS = --prefix $(CLIENT_DIR)
-NPM_INSTALL_FLAGS = $(NPM_FLAGS) --quiet --no-progress
-RACE = 0
-REVISION = $${REVISION:-$$(git rev-parse --short HEAD)}
-SIGN = 1
-SIGNER_API_KEY = not-a-real-key
-VERSION = v0.0.0
+# Go module path
+MODULE := github.com/AdguardTeam/AdGuardHome
 
-NEXTAPI = 0
+# Build output directory
+BUILD_DIR := build
 
-# Macros for the build-release target.  If FRONTEND_PREBUILT is 0, the default,
-# the macro $(BUILD_RELEASE_DEPS_$(FRONTEND_PREBUILT)) expands into
-# BUILD_RELEASE_DEPS_0, and so both frontend and backend dependencies are
-# fetched and the frontend is built.  Otherwise, if FRONTEND_PREBUILT is 1, only
-# backend dependencies are fetched and the frontend isn't rebuilt.
-#
-# TODO(a.garipov): We could probably do that from .../build-release.sh, but that
-# would mean either calling make from inside make or duplicating commands in two
-# places, both of which don't seem to me like nice solutions.
-FRONTEND_PREBUILT = 0
-BUILD_RELEASE_DEPS_0 = deps js-build
-BUILD_RELEASE_DEPS_1 = go-deps
+# Version information
+VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+DATE    ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# TODO(f.setrakov): Remove the bin directory from the paths, as it is no longer
-# needed.
-ENV = env \
-	CHANNEL='$(CHANNEL)' \
-	DEPLOY_SCRIPT_PATH='$(DEPLOY_SCRIPT_PATH)' \
-	DIST_DIR='$(DIST_DIR)' \
-	GO="$(GO.MACRO)" \
-	GOAMD64='$(GOAMD64)' \
-	GOPROXY='$(GOPROXY)' \
-	GOTELEMETRY='$(GOTELEMETRY)' \
-	GOTOOLCHAIN='$(GOTOOLCHAIN)' \
-	GPG_KEY='$(GPG_KEY)' \
-	GPG_KEY_PASSPHRASE='$(GPG_KEY_PASSPHRASE)' \
-	NEXTAPI='$(NEXTAPI)' \
-	PATH="$${PWD}/bin:$$("$(GO.MACRO)" env GOPATH)/bin:$${PATH}" \
-	RACE='$(RACE)' \
-	REVISION="$(REVISION)" \
-	SIGN='$(SIGN)' \
-	SIGNER_API_KEY='$(SIGNER_API_KEY)' \
-	VERBOSE="$(VERBOSE.MACRO)" \
-	VERSION="$(VERSION)" \
+# Go build flags
+LD_FLAGS := -ldflags "-s -w \
+	-X $(MODULE)/internal/version.version=$(VERSION) \
+	-X $(MODULE)/internal/version.commit=$(COMMIT) \
+	-X $(MODULE)/internal/version.builddate=$(DATE)"
 
-# Keep the line above blank.
+# Default target
+all: build
 
-ENV_MISC = env \
-	PATH="$${PWD}/bin:$$("$(GO.MACRO)" env GOPATH)/bin:$${PATH}" \
-	VERBOSE="$(VERBOSE.MACRO)" \
+## build: Compile the binary
+build:
+	@echo "Building $(BINARY_NAME) $(VERSION)..."
+	@mkdir -p $(BUILD_DIR)
+	go build $(LD_FLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./
 
-# Keep the line above blank.
+## build-race: Compile the binary with race detector
+build-race:
+	@echo "Building $(BINARY_NAME) with race detector..."
+	@mkdir -p $(BUILD_DIR)
+	go build -race $(LD_FLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-race ./
 
-# Keep this target first, so that a naked make invocation triggers a full build.
-.PHONY: build
-build: deps quick-build
+## test: Run all tests
+test:
+	@echo "Running tests..."
+	go test -count=1 -race -timeout 60s ./...
 
-.PHONY: init
-init: ; git config core.hooksPath ./scripts/hooks
+## test-short: Run short tests only
+test-short:
+	@echo "Running short tests..."
+	go test -short -count=1 -timeout 30s ./...
 
-.PHONY: quick-build
-quick-build: js-build go-build
+## lint: Run linters
+lint:
+	@echo "Running linters..."
+	golangci-lint run ./...
 
-.PHONY: deps lint test
-deps: js-deps go-deps
-lint: js-lint go-lint
-test: js-test go-test
+## vet: Run go vet
+vet:
+	@echo "Running go vet..."
+	go vet ./...
 
-# Here and below, keep $(SHELL) in quotes, because on Windows this will expand
-# to something like "C:/Program Files/Git/usr/bin/sh.exe".
-.PHONY: build-docker
-build-docker: ; $(ENV) "$(SHELL)" ./scripts/make/build-docker.sh
+## fmt: Format source code
+fmt:
+	@echo "Formatting source code..."
+	gofmt -w -s ./
+	goimports -w ./
 
-.PHONY: build-release
-build-release: $(BUILD_RELEASE_DEPS_$(FRONTEND_PREBUILT))
-	$(ENV) "$(SHELL)" ./scripts/make/build-release.sh
+## tidy: Tidy go modules
+tidy:
+	@echo "Tidying go modules..."
+	go mod tidy
 
-.PHONY: js-build js-deps js-typecheck js-lint js-test js-test-e2e
-js-build:     ; $(NPM) $(NPM_FLAGS) run build-prod
-js-deps:      ; $(NPM) $(NPM_INSTALL_FLAGS) ci
-js-typecheck: ; $(NPM) $(NPM_FLAGS) run typecheck
-js-lint:      ; $(NPM) $(NPM_FLAGS) run lint
-js-test:      ; $(NPM) $(NPM_FLAGS) run test
-js-test-e2e:  ; $(NPM) $(NPM_FLAGS) run test:e2e
+## clean: Remove build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	@rm -rf $(BUILD_DIR)
 
-# TODO(a.garipov): Think about making RACE='1' the default for all targets.
-.PHONY: go-bench go-build go-deps go-env go-fuzz go-lint go-test go-upd-tools
-go-bench:     ; $(ENV)          "$(SHELL)"    ./scripts/make/go-bench.sh
-go-build:     ; $(ENV)          "$(SHELL)"    ./scripts/make/go-build.sh
-go-deps:      ; $(ENV)          "$(SHELL)"    ./scripts/make/go-deps.sh
-go-env:       ; $(ENV)          "$(GO.MACRO)" env
-go-fuzz:      ; $(ENV)          "$(SHELL)"    ./scripts/make/go-fuzz.sh
-go-lint:      ; $(ENV)          "$(SHELL)"    ./scripts/make/go-lint.sh
-go-test:      ; $(ENV) RACE='1' "$(SHELL)"    ./scripts/make/go-test.sh
-go-upd-tools: ; $(ENV)          "$(SHELL)"    ./scripts/make/go-upd-tools.sh
+## run: Build and run the application
+run: build
+	@echo "Running $(BINARY_NAME)..."
+	./$(BUILD_DIR)/$(BINARY_NAME)
 
-.PHONY: go-check
-go-check: go-lint go-test
-
-# A quick check to make sure that all operating systems relevant to the
-# development of the project can be typechecked and built successfully.
-#
-# NOTE: It is also important to check on both 32- and 64-bit systems.
-.PHONY: go-os-check
-go-os-check:
-	$(ENV) GOOS='darwin'  "$(GO.MACRO)" vet ./...
-	$(ENV) GOOS='freebsd' "$(GO.MACRO)" vet ./...
-	$(ENV) GOOS='openbsd' "$(GO.MACRO)" vet ./...
-	$(ENV) GOOS='windows' "$(GO.MACRO)" vet ./...
-
-	$(ENV) GOARCH='amd64' GOOS='linux' "$(GO.MACRO)" vet ./...
-	$(ENV) GOARCH='386'   GOOS='linux' "$(GO.MACRO)" vet ./...
-
-.PHONY: txt-lint
-txt-lint: ; $(ENV) "$(SHELL)" ./scripts/make/txt-lint.sh
-
-.PHONY: md-lint sh-lint
-md-lint: ; $(ENV_MISC) "$(SHELL)" ./scripts/make/md-lint.sh
-sh-lint: ; $(ENV_MISC) "$(SHELL)" ./scripts/make/sh-lint.sh
-
-# TODO(a.garipov):  Re-add openapi-lint.
+## help: Display this help message
+help:
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Targets:"
+	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /' | column -t -s ':'
